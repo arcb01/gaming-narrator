@@ -1,13 +1,33 @@
-import sys, keyboard, pyautogui
+import sys, pyautogui
 import pygame, win32api, win32con, win32gui
 import ctypes
+import pyscreenshot as ImageGrab
+import os
+from pynput import mouse
+import sys
+from PIL import Image
+from io import BytesIO
+import win32clipboard
+import win32gui, win32com.client
+import pygame
+import win32api
+from pynput import keyboard
+import win32con
+import win32gui
+import time, pyautogui
+from pygame import gfxdraw
+from pynput.mouse import Listener as MouseListener
+from pynput.keyboard import Listener as KeyboardListener
+import pynput.mouse as mouse
+import pynput.keyboard as keyboard
+import time,webbrowser
+import sys
 
 from TTS import Narrator
 from ocr import OCR
 
 
-READ_CONTENT = 'm'
-QUICK_READ = 'º'
+READ_CONTENT = 'º'
 REPEAT_KEY = 'r'
 QUIT_KEY = 'esc'
 
@@ -38,7 +58,10 @@ class App:
         self.narrator = narrator
         self.OCR = OCR
         self.clock = pygame.time.Clock()
-        pygame.init()
+        self.transparent = True
+        self.mode = win32con.LWA_COLORKEY
+        self.alpha = 0
+        self.reading_mode = None
 
     def get_disp_size(self):
         """
@@ -66,87 +89,72 @@ class App:
         self.OCR.delete_imgs()
         sys.exit()
 
-    def read_everything(self):   
-
-        # TODO: Read everything
-
-        for detection in self.OCR.result:
-            self.draw_detection(detection)
-            self.narrator.say(detection[1])
-            
-
-    def check_events(self):
-        """
-        Captures any keyboard events
-        """
-
-        event = keyboard.read_event()
-
-        if event.event_type == keyboard.KEY_DOWN and event.name == QUIT_KEY:
-            self.quit()
-
-        if event.event_type == keyboard.KEY_DOWN and event.name == READ_CONTENT:
-            # Get mouse position
-            x, y = self.get_mouse_pos()
-            # Load display
-            self.load_display()
-            # Start OCR
-            #if self.OCR.check_start():
-            self.OCR.start()
-            #else:
-                #pass
-            # Find nearest detection from the mouse position
-            nearest_detection = self.OCR.find_nearest_detection(x, y)
-            # Draw detection
-            self.draw_detection(nearest_detection)
-            # Text to speech
-            self.narrator.say(self.output_text)
-            
-        if event.event_type == keyboard.KEY_DOWN and event.name == REPEAT_KEY:
-            # Repeat text a little bit slower
-            self.narrator.slower_saying(self.output_text)
-
-        if event.event_type == keyboard.KEY_DOWN and event.name == QUICK_READ:
-            # Load display
-            self.load_display()
-            # Start OCR
-            self.OCR.start()
-            # Read all detections
-            self.read_everything()
-
-
+    def interactions(self):
+        # Put current window on foreground
+        self.minimize()
+        # Start OCR
+        self.OCR.start()
+        # Draw all detections
+        for detection in self.OCR.get_all_detections():
+            self.draw_detection(detection, all_det=True)
 
     def load_display(self):
         """
         Loads the display window
         """
-        # https://stackoverflow.com/questions/550001/fully-transparent-windows-in-pygame
 
         pygame.init()
-        w, h = self.get_disp_size()
-        self.screen = pygame.display.set_mode((w, h)) # For borderless, use pygame.NOFRAME
-        fuchsia = (255, 0, 128)  # Transparency bbox_color
-        # Lock window to top
-        win32gui.SetWindowPos(pygame.display.get_wm_info()['window'], win32con.HWND_TOPMOST, 0,0,0,0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+        info = pygame.display.Info()
+        w = info.current_w
+        h = info.current_h
+        self.screen = pygame.display.set_mode((w, h), pygame.NOFRAME) # For borderless, use pygame.NOFRAME
+        done = False
+        self.fuchsia = (255, 0, 128)  # Transparency color
+        dark_red = (255, 0, 0)
         # Create layered window
+        win32gui.SetWindowPos(pygame.display.get_wm_info()['window'], win32con.HWND_TOPMOST, 0,0,0,0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
         hwnd = pygame.display.get_wm_info()["window"]
         win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE,
                             win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) | win32con.WS_EX_LAYERED)
-        # Set window transparency bbox_color
-        win32gui.SetLayeredWindowAttributes(hwnd, win32api.RGB(*fuchsia), 0, win32con.LWA_COLORKEY)
+        # Set window transparency color
+        win32gui.SetLayeredWindowAttributes(hwnd, win32api.RGB(*self.fuchsia), self.alpha, self.mode) # NOTE: Transparent
+        self.clear_screen = lambda : self.screen.fill(self.fuchsia)
 
-        self.screen.fill(fuchsia)  # Transparent background
-        self.clear_screen = lambda : self.screen.fill(fuchsia)
+    def check_keyevents(self):
 
-        pygame.display.update()
+        with keyboard.Events() as keyboardEvents:
+            keyboardEvent = keyboardEvents.get(0.1)
+            if keyboardEvent != None and "Press" in str(keyboardEvent):
+                if keyboardEvent.key == keyboard.Key.f4:
+                    self.mode = win32con.LWA_ALPHA
+                    self.alpha = 50
+                    self.transparent = False
+                    self.interactions()
+                if keyboardEvent.key == keyboard.Key.esc:
+                    self.mode = win32con.LWA_COLORKEY
+                    self.alpha = 0
+                    self.transparent = True
 
-    def draw_detection(self, detection : list):
+    def check_mouseevents(self):
+        with mouse.Events() as mouseEvents:
+            mouseEvent = mouseEvents.get(0.1)
+            if mouseEvent != None:
+                if "Click" in str(mouseEvent) and not self.transparent:
+                    x, y = mouseEvent.x, mouseEvent.y
+                    print(x, y)
+                else:
+                    return
+
+
+    def draw_detection(self, detection : list, all_det=False):
         """
         For a given detection, draw a bounding box around the text
         :param detection: a list containing the bounding box vertices, text, and confidence
         """
-    
-        self.clear_screen()
+
+        #if not all_det:
+            #self.clear_screen()
+
         bbox = detection[0]
         self.output_text = detection[1]
         top = bbox[0][0]
@@ -163,6 +171,30 @@ class App:
                         self.rect_width)
         pygame.display.update()
 
+    def minimize(self):
+        """
+        toplist = []
+        winlist = []
+
+        def enum_callback(hwnd, results):
+            winlist.append((hwnd, win32gui.GetWindowText(hwnd)))
+
+        win32gui.EnumWindows(enum_callback, toplist)
+        window = [(hwnd, title) for hwnd, title in winlist if 'resident' in title.lower()]
+        window_id = window[0]
+        win32gui.SetForegroundWindow(window_id[0])
+        """
+        # use the window handle to set focus
+        active_window = win32gui.GetForegroundWindow()
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shell.SendKeys('%')
+        win32gui.SetForegroundWindow(active_window)
+
+    def check_transparency(self):
+        if self.transparent:
+            self.screen.fill(self.fuchsia)  # Transparent background
+        else:
+            self.screen.fill((255, 255, 255))
 
     def run(self):
         """
@@ -171,9 +203,14 @@ class App:
 
         print("\n ==== App is running... ====")
         while True:
+            self.load_display()
+            self.check_keyevents()
+            self.check_transparency()
+            self.check_mouseevents()
+
+            pygame.display.update()
             self.clock.tick(60)
-            self.check_events()
-            
+
             
 if __name__ == "__main__":
 
