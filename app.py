@@ -76,8 +76,21 @@ class App:
             self.quit()
 
         if event.event_type == keyboard.KEY_DOWN and event.name == READ_NEAREST:
-            pass
-            # NOTE: This is not implemented yet
+            # Get mouse position
+            x, y = get_mouse_pos()
+            # Load display
+            self.load_display()
+            # Start OCR
+            #if self.OCR.check_start():
+            self.OCR.start()
+            #else:
+                #pass
+            # Find nearest detection from the mouse position
+            nearest_detection = self.OCR.find_nearest_detection(x, y)
+            # Draw detection
+            self.draw_detection(nearest_detection)
+            # Text to speech
+            self.narrator.say(self.output_text)
 
         if event.event_type == keyboard.KEY_DOWN and event.name == START_READING:
             self.det_idx = 0
